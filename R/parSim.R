@@ -7,10 +7,22 @@ parSim <- function(
   nCores = 1,
   export, # character string of global objects to export to the cluster.
   exclude, # List with dplyr calls to exclude cases. Written as formula
-  debug=FALSE
+  debug=FALSE,
+  progressbar = TRUE
 ){
   if (write && missing(name)){
     stop("Provide the argument 'name' if write = TRUE")
+  }
+  
+  if (progressbar){
+    PAR_FUN <- pbapply::pblapply
+  } else {
+    if (nCores > 1){
+      PAR_FUN <- snow::parLapply      
+    } else {
+      PAR_FUN <- lapply
+    }
+
   }
   
   # Collect the condiitions:
@@ -44,25 +56,30 @@ parSim <- function(
     
     ######################
     ## use Socket clusters
+    if (Sys.getenv("RSTUDIO") == "1" && !nzchar(Sys.getenv("RSTUDIO_TERM")) && 
+        Sys.info()["sysname"] == "Darwin" && gsub("\\..*","",getRversion()) == "4") {
+      snow::setDefaultClusterOptions(setup_strategy = "sequential")
+    }
+    
     if (!debug){
-      cl <- parallel::makePSOCKcluster(nClust)  
+      cl <- snow::makeSOCKcluster(nClust)  
     } else {
-      cl <- parallel::makePSOCKcluster(nClust, outfile = "clusterLOG.txt")
+      cl <- snow::makeSOCKcluster(nClust, outfile = "clusterLOG.txt")
     }
     
     #     # Start clusters:
     #     cl <- makeCluster(getOption("cl.cores", nCores))
     #     
     # Export the sim conditions:
-    parallel::clusterExport(cl, c("AllConditions","expr","debug"), envir = environment())
+    snow::clusterExport(cl, c("AllConditions","expr","debug"), envir = environment())
     
     # Export global objects:
     if (!missing(export)){
-      parallel::clusterExport(cl, export)  
+      snow::clusterExport(cl, export)  
     }
     
     # Run the loop:
-    Results <- pblapply(seq_len(totCondition), function(i){
+    Results <- PAR_FUN(seq_len(totCondition), function(i){
       
       if (debug){
         cat("\nRunning iteration:",i," / ",nrow(AllConditions),"\nTime:",as.character(Sys.time()),"\n")
@@ -88,7 +105,7 @@ parSim <- function(
   } else {
     
     # Run the loop:
-    Results <- pblapply(seq_len(totCondition), function(i){
+    Results <- PAR_FUN(seq_len(totCondition), function(i){
       
       if (debug){
         cat("\nRunning iteration:",i," / ",nrow(AllConditions),"\nTime:",as.character(Sys.time()),"\n")
