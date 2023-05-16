@@ -1,15 +1,17 @@
-parSim <- function(
-  ..., # Simulation conditions
-  expression, # R expression ending in data.frame of results
-  reps = 1,
-  write = FALSE, # if TRUE, results are written instead returned as data frame
-  name,
-  nCores = 1,
-  export, # character string of global objects to export to the cluster.
-  exclude, # List with dplyr calls to exclude cases. Written as formula
-  debug=FALSE,
-  progressbar = TRUE
+parSim_dt <- function(
+    ..., # Simulation conditions
+    expression, # R expression ending in data.frame of results
+    reps = 1,
+    write = FALSE, # if TRUE, results are written instead returned as data frame
+    name,
+    nCores = 1,
+    export, # character string of global objects to export to the cluster.
+    exclude, # List with dplyr calls to exclude cases. Written as formula
+    debug=FALSE,
+    progressbar = TRUE
 ){
+  
+  
   if (write && missing(name)){
     stop("Provide the argument 'name' if write = TRUE")
   }
@@ -22,34 +24,32 @@ parSim <- function(
     } else {
       PAR_FUN <- lapply
     }
-
+    
   }
   
   # Collect the condiitions:
   dots <- list(...)
   
   # Expand all conditions:
-  AllConditions <- do.call(expand.grid,c(dots,list(rep=seq_len(reps),stringsAsFactors=FALSE)))
+  AllConditions <- data.table(do.call(expand.grid, c(dots, list(rep = seq_len(reps), stringsAsFactors = FALSE))))
   
   # Exclude cases:
-  if (!missing(exclude)){
-    AllConditions <- AllConditions %>% dplyr::filter_(.dots = exclude)
+  if (!missing(exclude)) {
+    AllConditions <- AllConditions[eval(parse(text = paste(exclude, collapse = " & ")))]
   }
-  
   
   # Randomize:
   totCondition <- nrow(AllConditions)
-  if (totCondition > 1){
-    AllConditions <- AllConditions[sample(seq_len(totCondition)),]
+  if (totCondition > 1) {
+    AllConditions <- AllConditions[sample(seq_len(totCondition)), ]
   }
   
   # Total conditions:
-  
-  AllConditions$id <- seq_len(totCondition)
+  AllConditions[, id := seq_len(totCondition)]
   
   # Deparse the expression:
   expr <- as.expression(substitute(expression))
- 
+  
   if (nCores > 1){
     nClust <- nCores - 1
     
@@ -72,7 +72,8 @@ parSim <- function(
     #     
     # Export the sim conditions:
     snow::clusterExport(cl, c("AllConditions","expr","debug"), envir = environment())
-    
+    snow::clusterEvalQ(cl, requireNamespace("data.table", quietly = TRUE))
+  
     # Export global objects:
     if (!missing(export)){
       snow::clusterExport(cl, export)  
@@ -86,22 +87,19 @@ parSim <- function(
         print(AllConditions[i,])
       }
       
-      tryRes <- try(df <- eval(expr, envir = AllConditions[i,]))
-      if (is(tryRes,"try-error")){
-        if (debug){
-          browser()
-        }
-        return(list(error = TRUE, errorMessage = as.character(tryRes), id = AllConditions$id[i]))
+      tryRes <- try(eval(expr, envir = AllConditions[i]), silent = TRUE)
+      if (is(tryRes, "try-error")) {
+        return(data.table(error = TRUE, errorMessage = as.character(tryRes), id = AllConditions$id[i]))
       }
-      df <- as.data.frame(df)
-      df$id <- AllConditions$id[i]
-      df$error <- FALSE
-      df$errorMessage <- ''
-      df
+      
+      dt <- as.data.table(tryRes, keep.rownames = TRUE)
+      dt[, `:=` (id = AllConditions$id[i], error = FALSE, errorMessage = '')]
+      dt
     }, cl = cl)
     
     # Stop the cluster:
-    stopCluster(cl)
+    snow::stopCluster(cl)
+    
   } else {
     
     # Run the loop:
@@ -112,36 +110,30 @@ parSim <- function(
         print(AllConditions[i,])
       }
       
-      
-      tryRes <- try(df <- eval(expr, envir = AllConditions[i,]))
-      if (is(tryRes,"try-error")){
+      tryRes <- try(eval(expr, envir = AllConditions[i]), silent = TRUE)
+      if (is(tryRes, "try-error")) {
         return(list(error = TRUE, errorMessage = as.character(tryRes), id = AllConditions$id[i]))
       }
       
-      df <- as.data.frame(df)
-      df$id <- AllConditions$id[i]
-      df$error <- FALSE
-      df$errorMessage <- ''
-      df
+      dt <- as.data.table(tryRes, keep.rownames = TRUE)
+      dt[, `:=` (id = AllConditions$id[i], error = FALSE, errorMessage = '')]
+      dt
     })
   }
   
-  # rbind the list:
-  Results <- dplyr::bind_rows(Results)
-  Results$errorMessage <- as.character(Results$errorMessage)
+  # suppress the false warning about errorMessage
+  errorMessage = NULL
   
-  # Left join the results to the conditions:
-  AllResults <- AllConditions %>% dplyr::left_join(Results, by = "id")
+  # merge the results into a data.table
+  Results <- rbindlist(Results, fill = TRUE)
+  Results[, errorMessage := as.character(errorMessage)]
   
-  if (write){
+  # left-join results to conditions
+  AllResults <- merge(AllConditions, Results, by = "id", all.x = TRUE)
+  
+  if (write) {
     txtFile <- paste0(name,".txt")
-    # if (!file.exists(txtFile)){
-    write.table(AllResults, file = txtFile, col.names=TRUE,
-                row.names = FALSE, append=FALSE)   
-    #     } else {
-    #       write.table(AllResults, file = txtFile, col.names=FALSE,
-    #                   row.names = FALSE, append=TRUE)      
-    #     }
+    fwrite(AllResults, file = txtFile, sep = "\t", col.names = TRUE, row.names = FALSE, append = FALSE)
     
     return(NULL)
   } else {
