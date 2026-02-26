@@ -7,134 +7,153 @@ parSim_dt <- function(
     nCores = 1,
     export, # character string of global objects to export to the cluster.
     exclude, # List with dplyr calls to exclude cases. Written as formula
-    debug=FALSE,
-    progressbar = TRUE
+    debug = FALSE,
+    progressbar = TRUE,
+    env = parent.frame()
 ){
-  
-  
+
+  # Avoid "no visible binding for global variable" NOTEs from R CMD check:
+  id <- errorMessage <- NULL
+
   if (write && missing(name)){
     stop("Provide the argument 'name' if write = TRUE")
   }
-  
-  if (progressbar){
-    PAR_FUN <- pbapply::pblapply
-  } else {
-    if (nCores > 1){
-      PAR_FUN <- snow::parLapply      
-    } else {
-      PAR_FUN <- lapply
-    }
-    
-  }
-  
-  # Collect the condiitions:
+
+  # Collect the conditions:
   dots <- list(...)
-  
+
   # Expand all conditions:
-  AllConditions <- data.table(do.call(expand.grid, c(dots, list(rep = seq_len(reps), stringsAsFactors = FALSE))))
-  
+  AllConditions <- data.table::data.table(do.call(expand.grid, c(dots, list(rep = seq_len(reps), stringsAsFactors = FALSE))))
+
   # Exclude cases:
   if (!missing(exclude)) {
     AllConditions <- AllConditions[eval(parse(text = paste(exclude, collapse = " & ")))]
   }
-  
+
   # Randomize:
   totCondition <- nrow(AllConditions)
   if (totCondition > 1) {
     AllConditions <- AllConditions[sample(seq_len(totCondition)), ]
   }
-  
+
   # Total conditions:
   AllConditions[, id := seq_len(totCondition)]
-  
+
   # Deparse the expression:
   expr <- as.expression(substitute(expression))
-  
-  if (nCores > 1){
-    nClust <- nCores - 1
-    
-    
-    ######################
-    ## use Socket clusters
-    if (Sys.getenv("RSTUDIO") == "1" && !nzchar(Sys.getenv("RSTUDIO_TERM")) && 
-        Sys.info()["sysname"] == "Darwin" && gsub("\\..*","",getRversion()) == "4") {
-      snow::setDefaultClusterOptions(setup_strategy = "sequential")
+
+  # Prepare the task function:
+  task <- function(i){
+    if (debug){
+      cat("\nRunning iteration:",i," / ",nrow(AllConditions),"\nTime:",as.character(Sys.time()),"\n")
+      print(AllConditions[i,])
     }
-    
-    if (!debug){
-      cl <- snow::makeSOCKcluster(nClust)  
-    } else {
-      cl <- snow::makeSOCKcluster(nClust, outfile = "clusterLOG.txt")
+
+    tryRes <- try(eval(expr, envir = AllConditions[i]), silent = TRUE)
+    if (inherits(tryRes, "try-error")) {
+      return(data.table::data.table(error = TRUE, errorMessage = as.character(tryRes), id = AllConditions$id[i]))
     }
-    
-    #     # Start clusters:
-    #     cl <- makeCluster(getOption("cl.cores", nCores))
-    #     
-    # Export the sim conditions:
-    snow::clusterExport(cl, c("AllConditions","expr","debug"), envir = environment())
-    snow::clusterEvalQ(cl, requireNamespace("data.table", quietly = TRUE))
-  
-    # Export global objects:
-    if (!missing(export)){
-      snow::clusterExport(cl, export)  
-    }
-    
-    # Run the loop:
-    Results <- PAR_FUN(seq_len(totCondition), function(i){
-      
-      if (debug){
-        cat("\nRunning iteration:",i," / ",nrow(AllConditions),"\nTime:",as.character(Sys.time()),"\n")
-        print(AllConditions[i,])
-      }
-      
-      tryRes <- try(eval(expr, envir = AllConditions[i]), silent = TRUE)
-      if (is(tryRes, "try-error")) {
-        return(data.table(error = TRUE, errorMessage = as.character(tryRes), id = AllConditions$id[i]))
-      }
-      
-      dt <- as.data.table(tryRes, keep.rownames = TRUE)
-      dt[, `:=` (id = AllConditions$id[i], error = FALSE, errorMessage = '')]
-      dt
-    }, cl = cl)
-    
-    # Stop the cluster:
-    snow::stopCluster(cl)
-    
-  } else {
-    
-    # Run the loop:
-    Results <- PAR_FUN(seq_len(totCondition), function(i){
-      
-      if (debug){
-        cat("\nRunning iteration:",i," / ",nrow(AllConditions),"\nTime:",as.character(Sys.time()),"\n")
-        print(AllConditions[i,])
-      }
-      
-      tryRes <- try(eval(expr, envir = AllConditions[i]), silent = TRUE)
-      if (is(tryRes, "try-error")) {
-        return(list(error = TRUE, errorMessage = as.character(tryRes), id = AllConditions$id[i]))
-      }
-      
-      dt <- as.data.table(tryRes, keep.rownames = TRUE)
-      dt[, `:=` (id = AllConditions$id[i], error = FALSE, errorMessage = '')]
-      dt
-    })
+
+    dt <- data.table::as.data.table(tryRes, keep.rownames = TRUE)
+    dt[, `:=`(id = AllConditions$id[i], error = FALSE, errorMessage = '')]
+    dt
   }
-  
-  # suppress the false warning about errorMessage
-  errorMessage = NULL
-  
+
+  if (nCores > 1){
+    # Get the user's progress tracking preference.
+    user_progress <- parabar::get_option("progress_track")
+
+    # Sync the progress tracking.
+    parabar::set_option("progress_track", progressbar)
+
+    # Restore on exit.
+    on.exit({
+      parabar::set_option("progress_track", user_progress)
+    })
+
+    # Determine the backend type.
+    backend_type <- if (progressbar) "async" else "sync"
+
+    # Start a parabar backend.
+    backend <- parabar::start_backend(
+      cores = nCores,
+      cluster_type = "psock",
+      backend_type = backend_type
+    )
+
+    # On function exit free the resources.
+    on.exit({
+      parabar::stop_backend(backend)
+    }, add = TRUE)
+
+    # Export internal variables to the cluster.
+    parabar::export(
+      backend = backend,
+      variables = c("AllConditions", "expr", "debug"),
+      environment = environment()
+    )
+
+    # Export user variables from the caller's environment.
+    if (!missing(export)){
+      parabar::export(
+        backend = backend,
+        variables = export,
+        environment = env
+      )
+    }
+
+    # Ensure data.table is loaded on workers.
+    parabar::evaluate(backend, {
+      requireNamespace("data.table", quietly = TRUE)
+    })
+
+    # Execute the task in parallel.
+    Results <- parabar::par_lapply(
+      backend = backend,
+      x = seq_len(totCondition),
+      fun = task
+    )
+
+  } else {
+
+    if (progressbar) {
+      # Use parabar progress bar for sequential execution.
+      bar_type <- parabar::get_option("progress_bar_type")
+      bar_config <- parabar::get_option("progress_bar_config")[[bar_type]]
+      bar_factory <- parabar::BarFactory$new()
+      bar <- bar_factory$get(bar_type)
+
+      do.call(
+        bar$create,
+        utils::modifyList(
+          list(total = totCondition, initial = 0), bar_config
+        )
+      )
+
+      Results <- vector("list", totCondition)
+
+      for (i in seq_len(totCondition)) {
+        Results[[i]] <- task(i)
+        bar$update(i)
+      }
+
+      bar$terminate()
+    } else {
+      Results <- lapply(seq_len(totCondition), task)
+    }
+  }
+
   # merge the results into a data.table
-  Results <- rbindlist(Results, fill = TRUE)
+  Results <- data.table::rbindlist(Results, fill = TRUE)
   Results[, errorMessage := as.character(errorMessage)]
-  
+
   # left-join results to conditions
   AllResults <- merge(AllConditions, Results, by = "id", all.x = TRUE)
-  
+
   if (write) {
     txtFile <- paste0(name,".txt")
-    fwrite(AllResults, file = txtFile, sep = "\t", col.names = TRUE, row.names = FALSE, append = FALSE)
-    
+    data.table::fwrite(AllResults, file = txtFile, sep = "\t", col.names = TRUE, append = FALSE)
+
     return(NULL)
   } else {
     return(AllResults)

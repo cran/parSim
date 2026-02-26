@@ -1,16 +1,54 @@
 Package: parSim
-Type: Package
-Title: Parallel Simulation Studies
-Version: 0.1.5
-Author: Sacha Epskamp
-Maintainer: Sacha Epskamp <mail@sachaepskamp.com>
-Description: Perform flexible simulation studies using one or multiple computer cores.
-          The package is set up to be usable on high-performance clusters in addition
-          to being run locally, see examples on <https://github.com/SachaEpskamp/parSim>.
-Imports: dplyr, methods, pbapply, snow, data.table, utils
-Suggests: ggplot2, tidyr
+Title: Parallel Simulator
+Version: 0.3.1
+Authors@R: 
+    c(
+        person(
+            given = "Sacha",
+            family = "Epskamp",
+            role = c("aut", "cre"),
+            email = "mail@sachaepskamp.com",
+            comment = c(
+                ORCID = "0000-0003-4884-8118",
+                Website = "https://sachaepskamp.com"
+            )
+        ),
+        person(
+            given = "Xinkai",
+            family = "Du",
+            role = c("ctb"),
+            email = "xinkai.du.xd@gmail.com"
+        ),
+        person(
+            given = "Mihai",
+            family = "Constantin",
+            role = c("aut"),
+            email = "mihai@mihaiconstantin.com",
+            comment = c(
+                ORCID = "0000-0002-6460-0107",
+                Website = "https://mihaiconstantin.com"
+            )
+        )
+    )
+Description: Perform flexible simulation studies using one or multiple computer
+    cores. The package is set up to be usable on high-performance clusters in
+    addition to being run locally (i.e., see the package vignettes for more
+    information).
 License: GPL-2
+URL: https://github.com/SachaEpskamp/parSim
+BugReports: https://github.com/SachaEpskamp/parSim/issues
+Imports: data.table, dplyr, parabar, utils
+Encoding: UTF-8
+Suggests: knitr, rmarkdown, ggplot2, tidyr
+VignetteBuilder: knitr
 NeedsCompilation: no
-Packaged: 2023-05-16 11:50:26 UTC; sachaepskamp
+Packaged: 2026-02-26 12:27:11 UTC; sachaepskamp
+Author: Sacha Epskamp [aut, cre] (ORCID:
+    <https://orcid.org/0000-0003-4884-8118>, Website:
+    https://sachaepskamp.com),
+  Xinkai Du [ctb],
+  Mihai Constantin [aut] (ORCID: <https://orcid.org/0000-0002-6460-0107>,
+    Website: https://mihaiconstantin.com)
+Maintainer: Sacha Epskamp <mail@sachaepskamp.com>
 Repository: CRAN
-Date/Publication: 2023-05-16 12:10:02 UTC
+Date/Publication: 2026-02-26 12:40:02 UTC
